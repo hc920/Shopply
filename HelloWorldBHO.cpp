@@ -42,69 +42,116 @@ STDMETHODIMP CHelloWorldBHO::SetSite(IUnknown* pUnkSite)
 
 
 void STDMETHODCALLTYPE CHelloWorldBHO::OnNavigateComplete2(IDispatch *pDisp, VARIANT *pvarURL)
-{
-	BSTR queryurl = pvarURL->bstrVal;
-	if ( queryurl == _T(" ") )
+{	
+	CString queryurl = pvarURL->bstrVal;
+	if ( queryurl.GetLength() == 0 )
 		return;
 	else
 		CallShopplyAPI_ProcessResponse(queryurl);
 }
 
 
-void CHelloWorldBHO::CallShopplyAPI_ProcessResponse(BSTR url)
-{
+void CHelloWorldBHO::CallShopplyAPI_ProcessResponse(CString url)
+{		
+	//Request Headers	
+	CString strHeaders = _T("Content-Type: application/json\r\nAccept: application/json\r\nTenant-Id: 853e99f0affb11e1afa60800200c9a66\r\n\r\n");  
+	int header_length = strHeaders.GetLength();	
+
+
+	DWORD url_length = INTERNET_MAX_URL_LENGTH;
+	TCHAR encodedUrl[INTERNET_MAX_URL_LENGTH];
+
+	AtlEscapeUrl(url, encodedUrl, &url_length, INTERNET_MAX_URL_LENGTH, ATL_URL_ENCODE_PERCENT);
+
 	//connect to the server
-	HINTERNET Initialize, Connection, HttpRequest;
-    DWORD dwBytes;
+	HINTERNET hSession = InternetOpen(_T("HTTPPOST"), INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
+	if (!hSession) 
+		return;
+	HINTERNET hConnect = InternetConnect(hSession, _T("api.shop-o-saur.us"), INTERNET_DEFAULT_HTTP_PORT, NULL, NULL, INTERNET_SERVICE_HTTP, 0, NULL);
+	if ( !hConnect )
+		return;
+	
+	PCTSTR accept[2]={_T("*/*"), NULL};
+	CString ObjectName = _T("/website/deals/info?pageUrl=");
+	ObjectName += encodedUrl;
 
-    char ch;
-    Initialize = InternetOpen(_T("HTTPPOST"), INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, INTERNET_FLAG_ASYNC);
+	HINTERNET hRequest = HttpOpenRequest(hConnect, _T("GET"), ObjectName, NULL, NULL, accept, 0, 0);
+	if ( !hRequest )
+		return;
+	bool send_ok = HttpSendRequest(hRequest, (LPCWSTR)strHeaders, header_length, NULL, 0);
+	if ( !send_ok )
+		return;
 
-    Connection = InternetConnect(Initialize, _T("http://api.shop-o-saur.us"), INTERNET_DEFAULT_HTTP_PORT, NULL, NULL, INTERNET_SERVICE_HTTP, 0, 0);
-
-    HttpRequest = HttpOpenRequest(Connection, _T("POST"), _T("/website/deals/info?"), _T("HTTP/1.1"), 0, NULL, INTERNET_FLAG_RELOAD | INTERNET_FLAG_EXISTING_CONNECT, 0);
-
-	//Request Headers, Body
-	//json writer: convert data to json format
-	//Serialize a string.
-	DWORD length = INTERNET_MAX_URL_LENGTH;
-	WCHAR pageUrl[INTERNET_MAX_URL_LENGTH];
-	AtlEscapeUrl(url, pageUrl, &length, INTERNET_MAX_URL_LENGTH, ATL_URL_ENCODE_PERCENT);
-	BSTR Tenant_Id = L"853e99f0affb11e1afa60800200c9a66";
-
-	//Send Request
-
-
+	DWORD BytesRead = 0;
+	char* data = NULL;
+	DWORD dataSize  = 0;
+	char *szBuffer = NULL;
+	CString output;
 	//Process Response
-    InternetCloseHandle(HttpRequest);
-    InternetCloseHandle(Connection);
-    InternetCloseHandle(Initialize);
+	do 
+	{ 
+		// Read in a temporary buffer
+		szBuffer = new char[1024];
+		ZeroMemory(szBuffer, 1024);
+		InternetReadFile(hRequest, (LPVOID)szBuffer, 1024, &BytesRead); 
+		// If we have received anything add it to the global buffer and increase the byte-counter 
+		char* tempData = new char[dataSize+BytesRead];
+		tempData[dataSize+BytesRead] = '\0';
+		ZeroMemory(tempData, dataSize+BytesRead);
+		memcpy(tempData, data, dataSize);
+		memcpy(tempData + dataSize, szBuffer, BytesRead);
+//		delete[] data;
+		data = tempData;
+		dataSize += BytesRead;
+	} while ( BytesRead != 0 );
+	
+	//json parser
+	char* pch1 = strstr(data, "sosu-uid");
+	char* pch2 = strstr(pch1+12, "\"");
+	//pch1+12 ~ pch2-1
+	char* sosu_uid = new char[pch2-pch1-12];	
+    memcpy(sosu_uid, &data[pch1+12-data], pch2-pch1-12);
+	sosu_uid[pch2-pch1-12] = '\0';
+
+	char* pch3 = strstr(data, "response");
+	char* pch4 = strstr(pch3+1, "merchantExists");
+	if ( (pch4 == NULL) || (*(pch4+17) == 'f') )
+		return;
+	//merchantExists is true
+	char* coupons, *deals, *promos;
+	if ( *(pch4+17) == 't' )
+	{
+		char* pch5 = strstr(data, "\"coupons\":") ;
+		char* pch6 = strstr(data, "\"deals\":");
+		char* pch7 = strstr(data, "\"promos\":");
+
+		if ( pch5 != NULL )
+		{
+			char* pch52 = strstr(pch5+11, "]");
+			//pch5+11 ~ pch52
+			coupons = new char[pch52-pch5-10];
+			memcpy(coupons, &data[pch5+11-data], pch52-pch5-10);
+			coupons[pch52-pch5-10] = '\0';
+
+		}
+		if ( pch6 != NULL )
+		{
+			char* pch62 = strstr(pch6+9, "]");
+			//pch6+9 ~ pch62
+			deals = new char[pch62-pch6-8];
+			memcpy(deals, &data[pch6+9-data], pch62-pch6-8);
+			deals[pch62-pch6-8] = '\0';
+		}
+		if ( pch7 != NULL )
+		{
+			char* pch72 = strstr(pch7+10, "]");
+			//pch7+10 ~ pch72
+			promos = new char[pch72-pch7-9];
+			memcpy(promos, &data[pch7+10-data], pch72-pch7-9);
+			promos[pch72-pch7-9] = '\0';
+		}
+	}
+	InternetCloseHandle(hRequest);
+    InternetCloseHandle(hConnect);
+    InternetCloseHandle(hSession);
 }
-
-/*
-int encode_request_POST(char* url)
-{
-	int SIZE = 0;
-    memcpy(&bufw[SIZE], "GET ", 4);
-    SIZE += 4;
-    int len1 = strlen(url);
-    memcpy(&bufw[SIZE], url, len1);
-    SIZE += len1;
-    memcpy(&bufw[SIZE], " ", 1);
-    SIZE += 1;
-
-    char str[] = "HTTP/1.0\r\n";
-    int len2 = strlen(str);
-    memcpy(&bufw[SIZE], str, len2);
-    SIZE += len2;
-
-    char CRLF[] = "\r\n";
-    int len3 = strlen(CRLF);
-    memcpy(&bufw[SIZE], CRLF, len3);
-    SIZE += len3;
-    
-    printf("%s\n", url);
-    printf("%s", &bufw);
-    return SIZE;
-}
-*/
